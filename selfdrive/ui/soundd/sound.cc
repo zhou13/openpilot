@@ -6,7 +6,19 @@
 // TODO: detect when we can't play sounds
 // TODO: detect when we can't display the UI
 
+#include <QDebug>
+#include <QtMultimedia>
+
 Sound::Sound(QObject *parent) : sm({"carState", "controlsState"}) {
+
+  const auto deviceInfos = QAudioDeviceInfo::availableDevices(QAudio::AudioOutput);
+  for (const QAudioDeviceInfo &deviceInfo : deviceInfos)
+      qDebug() << "Device name: " << deviceInfo.deviceName();
+
+  QAudioDeviceInfo info(QAudioDeviceInfo::defaultOutputDevice());
+  qDebug() << "name " << info.deviceName();
+  qDebug() << "null " << info.isNull();
+
   const QString sound_asset_path = Hardware::TICI() ? "../../assets/sounds_tici/" : "../../assets/sounds/";
   for (auto &[alert, fn, loops] : sound_list) {
     QSoundEffect *s = new QSoundEffect(this);
