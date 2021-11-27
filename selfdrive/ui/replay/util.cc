@@ -26,14 +26,13 @@ struct MultiPartWriter {
   size_t offset;
   size_t end;
   size_t written;
-  std::ostream *os;
+  std::string *os;
 };
 
 size_t write_cb(char *data, size_t size, size_t count, void *userp) {
   MultiPartWriter *w = (MultiPartWriter *)userp;
-  w->os->seekp(w->offset);
   size_t bytes = size * count;
-  w->os->write(data, bytes);
+  memcpy(w->os->data() + w->offset, data, bytes);
   w->offset += bytes;
   w->written += bytes;
   return bytes;
@@ -81,14 +80,11 @@ void enableHttpLogging(bool enable) {
   enable_http_logging = enable;
 }
 
-bool httpMultiPartDownload(const std::string &url, std::ostream &os, int parts, size_t content_length, std::atomic<bool> *abort) {
+bool httpMultiPartDownload(const std::string &url, std::string &os, int parts, size_t content_length, std::atomic<bool> *abort) {
   static CURLGlobalInitializer curl_initializer;
   static std::mutex lock;
   static uint64_t total_written = 0, prev_total_written = 0;
   static double last_print_ts = 0;
-
-  os.seekp(content_length - 1);
-  os.write("\0", 1);
 
   CURLM *cm = curl_multi_init();
 
