@@ -9,6 +9,7 @@
 #include <iostream>
 #include <mutex>
 #include <numeric>
+#include <cstring>
 
 #include "selfdrive/common/timing.h"
 #include "selfdrive/common/util.h"
