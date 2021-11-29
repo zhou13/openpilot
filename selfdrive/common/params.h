@@ -1,41 +1,47 @@
-#ifndef _SELFDRIVE_COMMON_PARAMS_H_
-#define _SELFDRIVE_COMMON_PARAMS_H_
+#pragma once
 
-#include <stddef.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-int write_db_value(const char* params_path, const char* key, const char* value,
-                   size_t value_size);
-
-// Reads a value from the params database.
-// Inputs:
-//  params_path: The path of the database, or NULL to use the default.
-//  key: The key to read.
-//  value: A pointer where a newly allocated string containing the db value will
-//         be written.
-//  value_sz: A pointer where the size of value will be written. Does not
-//            include the NULL terminator.
-//
-// Returns: Negative on failure, otherwise 0.
-int read_db_value(const char* params_path, const char* key, char** value,
-                  size_t* value_sz);
-
-// Reads a value from the params database, blocking until successful.
-// Inputs are the same as read_db_value.
-void read_db_value_blocking(const char* params_path, const char* key,
-                            char** value, size_t* value_sz);
-
-#ifdef __cplusplus
-}  // extern "C"
-#endif
-
-#ifdef __cplusplus
 #include <map>
 #include <string>
-int read_db_all(const char* params_path, std::map<std::string, std::string> *params);
-#endif
 
-#endif  // _SELFDRIVE_COMMON_PARAMS_H_
+enum ParamKeyType {
+  PERSISTENT = 0x02,
+  CLEAR_ON_MANAGER_START = 0x04,
+  CLEAR_ON_PANDA_DISCONNECT = 0x08,
+  CLEAR_ON_IGNITION_ON = 0x10,
+  CLEAR_ON_IGNITION_OFF = 0x20,
+  DONT_LOG = 0x40,
+  ALL = 0xFFFFFFFF
+};
+
+class Params {
+public:
+  Params(const std::string &path = {});
+  bool checkKey(const std::string &key);
+  ParamKeyType getKeyType(const std::string &key);
+  inline std::string getParamPath(const std::string &key = {}) {
+    return key.empty() ? params_path + "/d" : params_path + "/d/" + key;
+  }
+
+  // Delete a value
+  int remove(const std::string &key);
+  void clearAll(ParamKeyType type);
+
+  // helpers for reading values
+  std::string get(const std::string &key, bool block = false);
+  inline bool getBool(const std::string &key) {
+    return get(key) == "1";
+  }
+  std::map<std::string, std::string> readAll();
+
+  // helpers for writing values
+  int put(const char *key, const char *val, size_t value_size);
+  inline int put(const std::string &key, const std::string &val) {
+    return put(key.c_str(), val.data(), val.size());
+  }
+  inline int putBool(const std::string &key, bool val) {
+    return put(key.c_str(), val ? "1" : "0", 1);
+  }
+
+private:
+  std::string params_path;
+};
