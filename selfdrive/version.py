@@ -1,71 +1,133 @@
+#!/usr/bin/env python3
 import os
 import subprocess
+from typing import List, Optional
+from functools import lru_cache
+
+from common.basedir import BASEDIR
 from selfdrive.swaglog import cloudlog
 
 
-def get_git_commit():
-  return subprocess.check_output(["git", "rev-parse", "HEAD"]).strip()
+TESTED_BRANCHES = ['devel', 'release2-staging', 'release3-staging', 'dashcam-staging', 'release2', 'release3', 'dashcam']
+
+training_version: bytes = b"0.2.0"
+terms_version: bytes = b"2"
 
 
-def get_git_branch():
-  return subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).strip()
+def cache(user_function, /):
+  return lru_cache(maxsize=None)(user_function)
 
 
-def get_git_full_branchname():
-  return subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).strip()
+def run_cmd(cmd: List[str]) -> str:
+  return subprocess.check_output(cmd, encoding='utf8').strip()
 
 
-def get_git_remote():
+def run_cmd_default(cmd: List[str], default: Optional[str] = None) -> Optional[str]:
   try:
-    local_branch = subprocess.check_output(["git", "name-rev", "--name-only", "HEAD"]).strip()
-    tracking_remote = subprocess.check_output(["git", "config", "branch." + local_branch + ".remote"]).strip()
-    return subprocess.check_output(["git", "config", "remote." + tracking_remote + ".url"]).strip()
+    return run_cmd(cmd)
   except subprocess.CalledProcessError:
-    # Not on a branch, fallback
-    return subprocess.check_output(["git", "config", "--get", "remote.origin.url"]).strip()
+    return default
 
 
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "common", "version.h")) as _versionf:
-  version = _versionf.read().split('"')[1]
+@cache
+def get_commit(branch: str = "HEAD", default: Optional[str] = None) -> Optional[str]:
+  return run_cmd_default(["git", "rev-parse", branch], default=default)
 
-try:
-  origin = get_git_remote()
-  if origin.startswith('git@github.com:commaai') or origin.startswith('https://github.com/commaai'):
-    if origin.endswith('/one.git'):
-      dirty = True
-    else:
-      branch = get_git_full_branchname()
 
+@cache
+def get_short_branch(default: Optional[str] = None) -> Optional[str]:
+  return run_cmd_default(["git", "rev-parse", "--abbrev-ref", "HEAD"], default=default)
+
+
+@cache
+def get_branch(default: Optional[str] = None) -> Optional[str]:
+  return run_cmd_default(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], default=default)
+
+
+@cache
+def get_origin(default: Optional[str] = None) -> Optional[str]:
+  try:
+    local_branch = run_cmd(["git", "name-rev", "--name-only", "HEAD"])
+    tracking_remote = run_cmd(["git", "config", "branch." + local_branch + ".remote"])
+    return run_cmd(["git", "config", "remote." + tracking_remote + ".url"])
+  except subprocess.CalledProcessError:  # Not on a branch, fallback
+    return run_cmd_default(["git", "config", "--get", "remote.origin.url"], default=default)
+
+
+@cache
+def get_version() -> str:
+  with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "common", "version.h")) as _versionf:
+    version = _versionf.read().split('"')[1]
+  return version
+
+
+@cache
+def get_prebuilt() -> bool:
+  return os.path.exists(os.path.join(BASEDIR, 'prebuilt'))
+
+
+@cache
+def get_comma_remote() -> bool:
+  origin = get_origin()
+  if origin is None:
+    return False
+
+  return origin.startswith('git@github.com:commaai') or origin.startswith('https://github.com/commaai')
+
+
+@cache
+def get_tested_branch() -> bool:
+  return get_short_branch() in TESTED_BRANCHES
+
+
+@cache
+def get_dirty() -> bool:
+  origin = get_origin()
+  branch = get_branch()
+  if (origin is None) or (branch is None):
+    return True
+
+  dirty = False
+  try:
+    # Actually check dirty files
+    if not get_prebuilt():
       # This is needed otherwise touched files might show up as modified
       try:
         subprocess.check_call(["git", "update-index", "--refresh"])
       except subprocess.CalledProcessError:
         pass
 
-      dirty = subprocess.call(["git", "diff-index", "--quiet", branch, "--"]) != 0
-      if dirty:
-        dirty_files = subprocess.check_output(["git", "diff-index", branch, "--"])
-        commit = subprocess.check_output(["git", "rev-parse", "--verify", "HEAD"]).rstrip()
-        origin_commit = subprocess.check_output(["git", "rev-parse", "--verify", branch]).rstrip()
-        cloudlog.event("dirty comma branch", vesion=version, dirty=dirty, origin=origin, branch=branch, dirty_files=dirty_files, commit=commit, origin_commit=origin_commit)
+      dirty = (subprocess.call(["git", "diff-index", "--quiet", branch, "--"]) != 0)
 
-  else:
+      # Log dirty files
+      if dirty and get_comma_remote():
+        try:
+          dirty_files = run_cmd(["git", "diff-index", branch, "--"])
+          cloudlog.event("dirty comma branch", version=get_version(), dirty=dirty, origin=origin, branch=branch,
+                          dirty_files=dirty_files, commit=get_commit(), origin_commit=get_commit(branch))
+        except subprocess.CalledProcessError:
+          pass
+
+    dirty = dirty or (not get_comma_remote())
+    dirty = dirty or ('master' in branch)
+
+  except subprocess.CalledProcessError:
+    cloudlog.exception("git subprocess failed while checking dirty")
     dirty = True
-except subprocess.CalledProcessError:
-  try:
-    cloudlog.exception("git subprocess failed while finding version")
-  except:
-    pass
-  dirty = True
 
-training_version = "0.1.0"
+  return dirty
+
 
 if __name__ == "__main__":
-  print("Dirty: %s" % dirty)
-  print("Version: %s" % version)
-  print("Remote: %s" % origin)
+  from common.params import Params
 
-  try:
-    print("Branch %s" % branch)
-  except NameError:
-    pass
+  params = Params()
+  params.put("TermsVersion", terms_version)
+  params.put("TrainingVersion", training_version)
+
+  print("Dirty: %s" % get_dirty())
+  print("Version: %s" % get_version())
+  print("Origin: %s" % get_origin())
+  print("Branch: %s" % get_branch())
+  print("Short branch: %s" % get_short_branch())
+  print("Prebuilt: %s" % get_prebuilt())
